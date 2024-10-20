@@ -1,23 +1,25 @@
 #include <GLFW/glfw3.h>
+#include <tbb/tbb.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_group.h>
 #include <vector>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
-#include <thread>
-#include <mutex>
 
 struct Ball {
     float x, y;          // Position
     float vx, vy;        // Velocity
     float radius;        // Radius
     float r, g, b;       // Color (RGB)
-    std::thread thread;  // Thread to handle ball movement
-    bool running;        // Flag to indicate if the thread should keep running
 };
 
-// Vector to store multiple balls
-std::vector<Ball> balls;
-std::mutex balls_mutex;  // Mutex to protect shared access to balls' positions
+// TBB concurrent vector to store multiple balls
+tbb::concurrent_vector<Ball> balls;
+
+// Gravity constant
+const float gravity = -0.03f;
 
 // Function to handle ball collision response
 void handleCollision(Ball &ball1, Ball &ball2) {
@@ -55,54 +57,42 @@ void handleCollision(Ball &ball1, Ball &ball2) {
     }
 }
 
-// Gravity constant
-const float gravity = -0.03f;
-
 // Updated function to update ball position and handle collisions
 void updateBall(Ball &ball) {
-    while (ball.running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(33)); // milliseconds(33) ~= 30 FPS, milliseconds(16) ~= 60 FPS
+    // Apply gravity to the ball's y-velocity
+    ball.vy += gravity;
 
-        // Lock the mutex to ensure thread-safe access
-        {
-            std::lock_guard<std::mutex> lock(balls_mutex);
+    // Update ball position
+    ball.x += ball.vx;
+    ball.y += ball.vy;
 
-            // Apply gravity to the ball's y-velocity
-            ball.vy += gravity;
+    // Bounce off the window boundaries
+    if (ball.x - ball.radius < 0) {
+        ball.x = ball.radius;
+        ball.vx = -ball.vx;
+    }
+    if (ball.x + ball.radius > 800) {
+        ball.x = 800 - ball.radius;
+        ball.vx = -ball.vx;
+    }
+    if (ball.y - ball.radius < 0) {
+        ball.y = ball.radius;
+        ball.vy = -ball.vy;
+    }
+    if (ball.y + ball.radius > 600) {
+        ball.y = 600 - ball.radius;
+        ball.vy = -ball.vy;
+    }
 
-            // Update ball position
-            ball.x += ball.vx;
-            ball.y += ball.vy;
-
-            // Bounce off the window boundaries
-            if (ball.x - ball.radius < 0) {
-                ball.x = ball.radius;   // Prevent overlap
-                ball.vx = -ball.vx;     // Reflect x-velocity
-            }
-            if (ball.x + ball.radius > 800) {
-                ball.x = 800 - ball.radius; // Prevent overlap
-                ball.vx = -ball.vx;         // Reflect x-velocity
-            }
-            if (ball.y - ball.radius < 0) {
-                ball.y = ball.radius;   // Prevent overlap
-                ball.vy = -ball.vy;     // Reflect y-velocity
-            }
-            if (ball.y + ball.radius > 600) {
-                ball.y = 600 - ball.radius; // Prevent overlap
-                ball.vy = -ball.vy;         // Reflect y-velocity
-            }
-
-            // Check for collisions with other balls
-            for (auto& other : balls) {
-                if (&ball != &other) {
-                    handleCollision(ball, other);
-                }
-            }
+    // Check for collisions with other balls
+    for (auto& other : balls) {
+        if (&ball != &other) {
+            handleCollision(ball, other);
         }
     }
 }
 
-// Function to initialize balls and start threads
+// Function to initialize balls
 void initializeBalls(int numBalls) {
     srand(static_cast<unsigned int>(time(0)));
     for (int i = 0; i < numBalls; ++i) {
@@ -122,25 +112,7 @@ void initializeBalls(int numBalls) {
             ball.r = 0.0f; ball.g = 0.0f; ball.b = 1.0f; // Blue
         }
 
-        // Set the running flag to true
-        ball.running = true;
-
         balls.push_back(std::move(ball));
-    }
-
-    // Start a thread for each ball after adding them to the vector
-    for (auto &ball : balls) {
-        ball.thread = std::thread(updateBall, std::ref(ball));
-    }
-}
-
-// Function to clean up and stop all ball threads
-void cleanupBalls() {
-    for (auto& ball : balls) {
-        ball.running = false;
-        if (ball.thread.joinable()) {
-            ball.thread.join();
-        }
     }
 }
 
@@ -158,10 +130,51 @@ void drawBall(const Ball& ball) {
     glEnd();
 }
 
+// Control thread function
+void controlThread(GLFWwindow* window) {
+    tbb::task_group group;
+
+    while (!glfwWindowShouldClose(window)) {
+        auto start = std::chrono::high_resolution_clock::now();
+
+        // Update ball positions in parallel
+        group.run([&]{
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, balls.size()),
+                [&](const tbb::blocked_range<size_t>& r) {
+                    for (size_t i = r.begin(); i != r.end(); ++i) {
+                        updateBall(balls[i]);
+                    }
+                }
+            );
+        });
+
+        group.wait();
+
+        // Render
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // Draw all balls
+        for (const auto& ball : balls) {
+            drawBall(ball);
+        }
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+        // Sleep for 30 FPS
+        if (duration.count() < 33) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(33 - duration.count()));
+        }
+    }
+}
+
 int main() {
     if (!glfwInit()) return -1;
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Multithreaded 2D Bouncing Balls Simulation", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(800, 600, "TBB 2D Bouncing Balls Simulation", NULL, NULL);
     if (!window) {
         glfwTerminate();
         return -1;
@@ -181,28 +194,10 @@ int main() {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f); 
 
     // Initialize balls
-    initializeBalls(5); // Start with 5 balls
+    initializeBalls(5);
 
-    // Main loop
-    while (!glfwWindowShouldClose(window)) {
-        // Render
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        // Lock mutex before drawing to ensure thread-safe access
-        {
-            std::lock_guard<std::mutex> lock(balls_mutex);
-            // Draw all balls
-            for (const auto& ball : balls) {
-                drawBall(ball);
-            }
-        }
-
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-    }
-
-    // Clean up threads
-    cleanupBalls();
+    // Start the control thread
+    controlThread(window);
 
     glfwTerminate();
     return 0;
