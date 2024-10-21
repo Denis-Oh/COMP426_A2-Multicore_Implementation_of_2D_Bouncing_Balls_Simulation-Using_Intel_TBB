@@ -1,4 +1,4 @@
-# COMP-426 A1: Multicore Implementation of 2D Bouncing Balls Simulation Using Multiple Threads
+# COMP-426 A2: Multicore Implementation of 2D Bouncing Balls Simulation Using Intel TBB
 
 Name: Denis Oh
 
@@ -14,14 +14,17 @@ Student ID: 40208580
 - `./BouncingBalls`
 
 ## Introduction:
-This 2D bouncing balls simulation uses multiple threads to leverage multicore processing. The simulation consists of several coloured balls moving and bouncing within a window, affected by gravity and interacting with each other upon collision. Each ball runs on a separate thread, and the simulation was designed to achieve smooth animation and efficient performance.
+This 2D bouncing balls simulation uses Intel Threading Building Blocks (TBB) to leverage multicore processing. The simulation consists of several coloured balls moving and bouncing within a window, affected by gravity and interacting with each other upon collision. The simulation was redesigned from Assignment 1 to use TBB constructs for improved parallelism and efficiency.
 
 ## Design and Optimization:
 
-### Multithreaded Design:
-Computation Threads: Each ball in the simulation is managed by its own thread. This design choice allows each ball to update its position, velocity, and handle collisions independently of the others, taking full advantage of multicore processing. The std::thread library was used to create these threads.
+### TBB Integration:
+Concurrent vector: The std::vector from Assignment 1 has been replaced with tbb::concurrent_vector. This allows for safe parallel access and modification without the need for explicit locking, improving performance in multi-threaded scenarios.
 
-Control Thread: The main thread in the main function acts as the control thread. It is responsible for initializing the simulation, rendering the balls on the screen using OpenGL, and cleaning up the threads when the program exits.
+Parallel Execution: Instead of individual threads for each ball, we now use tbb::parallel_for to update all balls concurrently. This approach divides the work of updating balls among available threads, potentially utilizing all available CPU cores more efficiently.
+
+### Control Thread Implementation:
+The control thread function manages the main simulation loop, including updating ball positions, rendering, and maintaining the frame rate. It uses a tbb::task_group to run the parallel ball updates:
 
 ### Gravity and Motion:
 A constant gravitational force is applied to each ball's vertical velocity (vy) during each update, simulating the effect of gravity pulling the balls downward.
@@ -34,8 +37,7 @@ Wall Collisions: The simulation detects when a ball reaches the window's boundar
 Ball-to-Ball Collisions: When two balls collide, their x and y velocities are re-calculated. The change in velocity is calculated based on the relative velocity and the collision vector between the two balls.
 
 ### Rendering with OpenGL:
-The balls on screen are rendered with the OpenGL library. The drawBall function draws each ball as a fan of triangles with OpenGL's GL_TRIANGLE_FAN. The result resembles a circle.
+The rendering process using OpenGL remains largely unchanged from Assignment 1. The balls on screen are rendered with the OpenGL library. The drawBall function draws each ball as a fan of triangles with OpenGL's GL_TRIANGLE_FAN. The result resembles a circle.
 
-### Mutex Locking: 
-To avoid data races when multiple threads access shared resources (e.g., the balls vector), a std::mutex (balls_mutex) is used to protect access to shared data. This ensures thread-safe updates of ball positions and collision handling.
-
+## Conclusion:
+By transitioning from standard C++ threads to Intel TBB, we've created a more scalable and efficient implementation of the 2D bouncing balls simulation. The use of TBB's concurrent data structures and parallel algorithms allows for better utilization of multi-core processors, while the control thread ensures proper synchronization and timing of the simulation updates and rendering.
